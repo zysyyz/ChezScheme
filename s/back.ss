@@ -1,6 +1,6 @@
 "back.ss"
 ;;; back.ss
-;;; Copyright 1984-2016 Cisco Systems, Inc.
+;;; Copyright 1984-2017 Cisco Systems, Inc.
 ;;; 
 ;;; Licensed under the Apache License, Version 2.0 (the "License");
 ;;; you may not use this file except in compliance with the License.
@@ -119,6 +119,11 @@
     (lambda (x)
       (and x #t))))
 
+(define $enable-check-prelex-flags
+  ($make-thread-parameter #f
+    (lambda (x)
+      (and x #t))))
+
 (define-who run-cp0
   ($make-thread-parameter
     (default-run-cp0)
@@ -149,6 +154,40 @@
     (lambda (x)
       (unless (procedure? x) ($oops who "~s is not a procedure" x))
       x)))
+
+(define-who compress-format
+  (case-lambda
+    [()
+     (let ([x ($tc-field 'compress-format ($tc))])
+       (cond
+         [(eqv? x (constant COMPRESS-GZIP)) 'gzip]
+         [(eqv? x (constant COMPRESS-LZ4)) 'lz4]
+         [else ($oops who "unexpected $compress-format value ~s" x)]))]
+    [(x)
+     ($tc-field 'compress-format ($tc)
+       (case x
+         [(gzip) (constant COMPRESS-GZIP)]
+         [(lz4) (constant COMPRESS-LZ4)]
+         [else ($oops who "~s is not a supported format" x)]))]))
+
+(define-who compress-level
+  (case-lambda
+    [()
+     (let ([x ($tc-field 'compress-level ($tc))])
+       (cond
+         [(eqv? x (constant COMPRESS-LOW)) 'low]
+         [(eqv? x (constant COMPRESS-MEDIUM)) 'medium]
+         [(eqv? x (constant COMPRESS-HIGH)) 'high]
+         [(eqv? x (constant COMPRESS-MAX)) 'maximum]
+         [else ($oops who "unexpected $compress-level value ~s" x)]))]
+    [(x)
+     ($tc-field 'compress-level ($tc)
+       (case x
+         [(low) (constant COMPRESS-LOW)]
+         [(medium) (constant COMPRESS-MEDIUM)]
+         [(high) (constant COMPRESS-HIGH)]
+         [(maximum) (constant COMPRESS-MAX)]
+         [else ($oops who "~s is not a supported level" x)]))]))
 
 (define-who debug-level
   ($make-thread-parameter

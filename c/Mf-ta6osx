@@ -1,5 +1,5 @@
 # Mf-ta6osx
-# Copyright 1984-2016 Cisco Systems, Inc.
+# Copyright 1984-2017 Cisco Systems, Inc.
 # 
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -17,7 +17,7 @@ m = ta6osx
 Cpu = X86_64
 
 mdclib = -liconv -lm -lncurses
-C = gcc ${CPPFLAGS} -m64 -Wpointer-arith -Wall -Wextra -Werror -O2 -I/opt/X11/include/ ${CFLAGS}
+C = ${CC} ${CPPFLAGS} -m64 -Wpointer-arith -Wall -Wextra -Wno-implicit-fallthrough -Werror -O2 -I/opt/X11/include/ ${CFLAGS}
 o = o
 mdsrc = i3le.c
 mdobj = i3le.o
@@ -26,15 +26,18 @@ mdobj = i3le.o
 .SUFFIXES: .c .o
 
 .c.o:
-	$C -c -D${Cpu} -I${Include} -I../zlib $*.c
+	$C -c -D${Cpu} -I${Include} ${zlibInc} ${LZ4Inc} $*.c
 
 include Mf-base
 
-${Kernel}: ${kernelobj} ../zlib/libz.a
-	ld -r -o ${Kernel} ${kernelobj} ../zlib/libz.a
+${Kernel}: ${kernelobj} ${zlibDep} ${LZ4Dep}
+	ld -r -o ${Kernel} ${kernelobj} ${zlibLib} ${LZ4Lib}
 
 ${Scheme}: ${Kernel} ${Main}
 	$C -o ${Scheme} ${Kernel} ${Main} ${mdclib} ${LDFLAGS}
 
 ../zlib/configure.log:
-	(cd ../zlib; CFLAGS=-m64 ./configure --64)
+	(cd ../zlib; CFLAGS="${CFLAGS} -m64" ./configure --64)
+
+../lz4/lib/liblz4.a: ${LZ4Sources}
+	(cd ../lz4/lib; CFLAGS="${CFLAGS} -m64" ${MAKE} liblz4.a)

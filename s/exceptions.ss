@@ -1,6 +1,6 @@
 "exceptions.ss"
 ;;; exceptions.ss
-;;; Copyright 1984-2016 Cisco Systems, Inc.
+;;; Copyright 1984-2017 Cisco Systems, Inc.
 ;;; 
 ;;; Licensed under the Apache License, Version 2.0 (the "License");
 ;;; you may not use this file except in compliance with the License.
@@ -35,23 +35,23 @@ TODO:
 
   (let ()
     (define $display-condition
-      (lambda (c op prefix?)
+      (lambda (c op prefix? use-cache?)
         (module (print-source)
           (include "types.ss")
           (define (print-position op prefix src start?)
-            (let ([sfd (source-sfd src)]
-                  [fp (if start? (source-bfp src) (source-efp src))])
-              (call-with-values
-                (lambda () ($locate-source sfd fp))
-                (case-lambda
-                  [()
+            (call-with-values
+              (lambda () ((current-locate-source-object-source) src start? use-cache?))
+              (case-lambda
+                [()
+                 (let ([sfd (source-sfd src)]
+                       [fp (if start? (source-bfp src) (source-efp src))])
                    (fprintf op "~a~a char ~a of ~a" prefix
                      (if (eq? start? 'near) "near" "at")
-                     fp (source-file-descriptor-name sfd))]
-                  [(path line char)
-                   (fprintf op "~a~a line ~a, char ~a of ~a" prefix
-                     (if (eq? start? 'near) "near" "at")
-                     line char path)]))))
+                     fp (source-file-descriptor-name sfd)))]
+                [(path line char)
+                 (fprintf op "~a~a line ~a, char ~a of ~a" prefix
+                   (if (eq? start? 'near) "near" "at")
+                   line char path)])))
           (define (print-source op prefix c)
             (cond
               [($src-condition? c)
@@ -145,11 +145,11 @@ TODO:
 
     (set-who! display-condition
       (case-lambda
-        [(c) ($display-condition c (current-output-port) #t)]
+        [(c) ($display-condition c (current-output-port) #t #f)]
         [(c op)
          (unless (and (output-port? op) (textual-port? op))
            ($oops who "~s is not a textual output port" op))
-         ($display-condition c op #t)]))
+         ($display-condition c op #t #f)]))
 
     (set! $make-source-oops
       (lambda (who msg expr)
@@ -159,7 +159,7 @@ TODO:
                   ($display-condition (condition
                                         (make-syntax-violation expr #f)
                                         (make-message-condition msg))
-                    p #f)))))))
+                    p #f #t)))))))
 
   (set! default-exception-handler
     (lambda (c)
@@ -608,9 +608,9 @@ TODO:
 
   (define (error-help warning? who whoarg message irritants basecond)
     (unless (or (eq? whoarg #f) (string? whoarg) (symbol? whoarg))
-      ($oops who "invalid who argument ~s" whoarg))
+      ($oops who "invalid who argument ~s (message = ~s, irritants = ~s)" whoarg message irritants))
     (unless (string? message)
-      ($oops who "invalid message argument ~s" message))
+      ($oops who "invalid message argument ~s (who = ~s, irritants = ~s)" message whoarg irritants))
     (let ([c (if whoarg
                  (if irritants
                      (condition basecond
@@ -640,7 +640,9 @@ TODO:
     (lambda (whoarg message . irritants)
       (error-help #f who whoarg message irritants favcond)))
 
-  (set! $oops assertion-violationf)
+  (set-who! $oops
+    (lambda (whoarg message . irritants)
+      (error-help #f who whoarg message irritants favcond)))
 
   (set-who! $oops/c
     (lambda (whoarg basecond message . irritants)

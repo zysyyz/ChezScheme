@@ -1,5 +1,5 @@
 /* system.h
- * Copyright 1984-2016 Cisco Systems, Inc.
+ * Copyright 1984-2017 Cisco Systems, Inc.
  * 
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,17 +17,20 @@
 #include "scheme.h"
 #include "equates.h"
 #ifdef FEATURE_WINDOWS
+#define WINVER 0x0601 // Windows 7
+#define _WIN32_WINNT WINVER
 #include <windows.h>
 #endif
 
 #include "version.h"
 #include <stdio.h>
-#include "zlib.h"
 #include <stddef.h>
 
 #include "thread.h"
 
 #include "types.h"
+
+#include "compress-io.h"
 
 #ifndef EXTERN
 #define EXTERN extern

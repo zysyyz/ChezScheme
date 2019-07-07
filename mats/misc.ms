@@ -1,5 +1,5 @@
 ;;; misc.ms
-;;; Copyright 1984-2016 Cisco Systems, Inc.
+;;; Copyright 1984-2017 Cisco Systems, Inc.
 ;;; 
 ;;; Licensed under the Apache License, Version 2.0 (the "License");
 ;;; you may not use this file except in compliance with the License.
@@ -272,6 +272,18 @@
        (case-lambda
          [() (q 0)]
          [(x) (q)])))
+   ; regression tests for non-tail-call mref lvalue destination
+   (begin
+     (define (c1-f a)
+       (let ([x (fxvector 0)])
+         (lambda (v) (fxvector-set! x 0 (modulo v a)) x)))
+     #t)
+   (equal? ((c1-f 7) 10) #vfx(3))
+   (begin
+     (define (c1-id x) x)
+     (define (c1-g x) (vector-set-fixnum! x 0 (c1-id 17)))
+     #t)
+   (equal? (let ([v (vector 3)]) (c1-g v) v) '#(17))
 )
 
 (mat compiler2 ; random tests
@@ -604,6 +616,12 @@
                   17)))])
         (cons v ls)))
     '(3 17 17))
+  ; regression test for bug in which $flonum-exponent read past mapped memory
+  (eq?
+    (do ([n 2000 (- n 1)] [ls (iota 2000)])
+        ((= n 0) 'fini)
+      (map (lambda (x) (let ([x (exact (sqrt -2.0))]) x)) ls))
+    'fini)
 )
 
 (mat compiler3
@@ -1474,6 +1492,23 @@
            (define x (f))
            x)))
     '17)
+  ; check for regression: cpvalid leaving behind a cpvalid-defer form
+  (equivalent-expansion?
+    (parameterize ([run-cp0 (lambda (cp0 x) x)]
+                   [optimize-level 2])
+      (expand/optimize '(letrec* ([f (letrec ([x x]) (lambda () x))]) 0)))
+    '(let ([f (let ([valid? #f])
+                (let ([x (#2%void)])
+                  (set! x
+                    (begin
+                      (if valid?
+                          (#2%void)
+                          (#2%$source-violation #f #f #t
+                            "attempt to reference undefined variable ~s" 'x))
+                      x))
+                  (set! valid? #t)
+                  (lambda () x)))])
+       0))
 )
 
 (mat compile-profile
@@ -1758,13 +1793,8 @@
   (eqv?
     ($frumble (make-list 100 5))
     9860761315262647567646607066034827870915080438862787559628486633300781)
-  (andmap
-    ; if counts for define and lambda on the first two lines are available (haven't
-    ; been tossed by the collector), check that they are 1
-    (lambda (x) (= (car x) 1))
-    (filter (lambda (x) (and (equal? (cadr x) "testfile-cp1.ss") (<= (list-ref x 4) 2))) (profile-dump-list)))
   (equal?
-    (filter (lambda (x) (and (equal? (cadr x) "testfile-cp1.ss") (>= (list-ref x 4) 3))) (profile-dump-list))
+    (filter (lambda (x) (equal? (cadr x) "testfile-cp1.ss")) (profile-dump-list))
     '((101 "testfile-cp1.ss" 36 258 3 5)
       (101 "testfile-cp1.ss" 40 50 3 9)
       (101 "testfile-cp1.ss" 41 46 3 10)
@@ -1790,6 +1820,8 @@
       (100 "testfile-cp1.ss" 247 248 9 24)
       (100 "testfile-cp1.ss" 249 250 9 26)
       (100 "testfile-cp1.ss" 251 252 9 28)
+      (1 "testfile-cp1.ss" 0 260 1 1)
+      (1 "testfile-cp1.ss" 19 259 2 3)
       (1 "testfile-cp1.ss" 59 60 4 9)
       (0 "testfile-cp1.ss" 128 178 7 15)
       (0 "testfile-cp1.ss" 129 136 7 16)
@@ -1806,11 +1838,8 @@
         (let ([ans ($frumble (append (make-list 50 5) (list 0) (make-list 50 7)))])
           ($return ans))))
     0)
-  (andmap
-    (lambda (x) (= (car x) 1))
-    (filter (lambda (x) (and (equal? (cadr x) "testfile-cp1.ss") (<= (list-ref x 4) 2))) (profile-dump-list)))
   (equal?
-    (filter (lambda (x) (and (equal? (cadr x) "testfile-cp1.ss") (>= (list-ref x 4) 3))) (profile-dump-list))
+    (filter (lambda (x) (equal? (cadr x) "testfile-cp1.ss")) (profile-dump-list))
     '((152 "testfile-cp1.ss" 36 258 3 5)
       (152 "testfile-cp1.ss" 40 50 3 9)
       (152 "testfile-cp1.ss" 41 46 3 10)
@@ -1836,6 +1865,8 @@
       (100 "testfile-cp1.ss" 247 248 9 24)
       (100 "testfile-cp1.ss" 249 250 9 26)
       (100 "testfile-cp1.ss" 251 252 9 28)
+      (1 "testfile-cp1.ss" 0 260 1 1)
+      (1 "testfile-cp1.ss" 19 259 2 3)
       (1 "testfile-cp1.ss" 59 60 4 9)
       (1 "testfile-cp1.ss" 128 178 7 15)
       (1 "testfile-cp1.ss" 129 136 7 16)
@@ -1851,11 +1882,50 @@
         (set! $return k)
         ($retry 1)))
     111022302462515654042363166809082031)
-  (andmap
-    (lambda (x) (= (car x) 1))
-    (filter (lambda (x) (and (equal? (cadr x) "testfile-cp1.ss") (<= (list-ref x 4) 2))) (profile-dump-list)))
   (equal?
-    (filter (lambda (x) (and (equal? (cadr x) "testfile-cp1.ss") (>= (list-ref x 4) 3))) (profile-dump-list))
+    (filter (lambda (x) (equal? (cadr x) "testfile-cp1.ss")) (profile-dump-list))
+    '((152 "testfile-cp1.ss" 36 258 3 5)
+      (152 "testfile-cp1.ss" 40 50 3 9)
+      (152 "testfile-cp1.ss" 41 46 3 10)
+      (152 "testfile-cp1.ss" 47 49 3 16)
+      (151 "testfile-cp1.ss" 69 257 5 9)
+      (151 "testfile-cp1.ss" 78 86 5 18)
+      (151 "testfile-cp1.ss" 79 82 5 19)
+      (151 "testfile-cp1.ss" 83 85 5 23)
+      (151 "testfile-cp1.ss" 99 256 6 11)
+      (151 "testfile-cp1.ss" 103 113 6 15)
+      (151 "testfile-cp1.ss" 104 108 6 16)
+      (151 "testfile-cp1.ss" 109 110 6 21)
+      (151 "testfile-cp1.ss" 111 112 6 23)
+      (150 "testfile-cp1.ss" 193 255 8 15)
+      (150 "testfile-cp1.ss" 202 221 8 24)
+      (150 "testfile-cp1.ss" 203 211 8 25)
+      (150 "testfile-cp1.ss" 212 220 8 34)
+      (150 "testfile-cp1.ss" 213 216 8 35)
+      (150 "testfile-cp1.ss" 217 219 8 39)
+      (150 "testfile-cp1.ss" 240 254 9 17)
+      (150 "testfile-cp1.ss" 241 245 9 18)
+      (150 "testfile-cp1.ss" 246 253 9 23)
+      (150 "testfile-cp1.ss" 247 248 9 24)
+      (150 "testfile-cp1.ss" 249 250 9 26)
+      (150 "testfile-cp1.ss" 251 252 9 28)
+      (1 "testfile-cp1.ss" 0 260 1 1)
+      (1 "testfile-cp1.ss" 19 259 2 3)
+      (1 "testfile-cp1.ss" 59 60 4 9)
+      (1 "testfile-cp1.ss" 128 178 7 15)
+      (1 "testfile-cp1.ss" 129 136 7 16)
+      (1 "testfile-cp1.ss" 137 177 7 24)
+      (1 "testfile-cp1.ss" 149 164 7 36)
+      (1 "testfile-cp1.ss" 162 163 7 49)
+      (1 "testfile-cp1.ss" 165 176 7 52)
+      (1 "testfile-cp1.ss" 166 173 7 53)
+      (1 "testfile-cp1.ss" 174 175 7 61)))
+  (begin
+    (collect (collect-maximum-generation)) ; drop code object for the define and lambda
+    (profile-release-counters) ; drop proile information for the dropped code object
+    #t)
+  (equal?
+    (filter (lambda (x) (equal? (cadr x) "testfile-cp1.ss")) (profile-dump-list))
     '((152 "testfile-cp1.ss" 36 258 3 5)
       (152 "testfile-cp1.ss" 40 50 3 9)
       (152 "testfile-cp1.ss" 41 46 3 10)
@@ -1890,6 +1960,88 @@
       (1 "testfile-cp1.ss" 165 176 7 52)
       (1 "testfile-cp1.ss" 166 173 7 53)
       (1 "testfile-cp1.ss" 174 175 7 61)))
+  ; test profiling with compiled files
+  (begin
+    (with-output-to-file "testfile-cp2.ss"
+      (lambda ()
+        (display-string "\
+(define cp2-fib
+  (rec fib
+    (lambda (n)
+      (cond
+        [(fx= n 0) 1]
+        [(fx= n 1) 1]
+        [else (+ (fib (- n 1)) (fib (- n 2)))]))))
+"))
+      'replace)
+    (parameterize ([enable-cp0 #t] [#%$suppress-primitive-inlining #f] [optimize-level 2] [compile-profile #t])
+      (compile-file "testfile-cp2"))
+    (profile-clear)
+    (load "testfile-cp2.so")
+    #t)
+  (eqv? (cp2-fib 10) 89)
+  (equal?
+    (filter (lambda (x) (equal? (cadr x) "testfile-cp2.ss")) (profile-dump-list))
+    '((177 "testfile-cp2.ss" 49 146 4 7)
+      (177 "testfile-cp2.ss" 64 73 5 10)
+      (177 "testfile-cp2.ss" 65 68 5 11)
+      (177 "testfile-cp2.ss" 69 70 5 15)
+      (177 "testfile-cp2.ss" 71 72 5 17)
+      (143 "testfile-cp2.ss" 86 95 6 10)
+      (143 "testfile-cp2.ss" 87 90 6 11)
+      (143 "testfile-cp2.ss" 91 92 6 15)
+      (143 "testfile-cp2.ss" 93 94 6 17)
+      (88 "testfile-cp2.ss" 113 144 7 15)
+      (88 "testfile-cp2.ss" 114 115 7 16)
+      (88 "testfile-cp2.ss" 116 129 7 18)
+      (88 "testfile-cp2.ss" 117 120 7 19)
+      (88 "testfile-cp2.ss" 121 128 7 23)
+      (88 "testfile-cp2.ss" 122 123 7 24)
+      (88 "testfile-cp2.ss" 124 125 7 26)
+      (88 "testfile-cp2.ss" 126 127 7 28)
+      (88 "testfile-cp2.ss" 130 143 7 32)
+      (88 "testfile-cp2.ss" 131 134 7 33)
+      (88 "testfile-cp2.ss" 135 142 7 37)
+      (88 "testfile-cp2.ss" 136 137 7 38)
+      (88 "testfile-cp2.ss" 138 139 7 40)
+      (88 "testfile-cp2.ss" 140 141 7 42)
+      (55 "testfile-cp2.ss" 96 97 6 20)
+      (34 "testfile-cp2.ss" 74 75 5 20)
+      (1 "testfile-cp2.ss" 0 149 1 1)
+      (1 "testfile-cp2.ss" 18 148 2 3)
+      (1 "testfile-cp2.ss" 23 26 2 8)
+      (1 "testfile-cp2.ss" 31 147 3 5)))
+  (begin
+    (collect (collect-maximum-generation)) ; drop code object for the define and lambda
+    (profile-release-counters) ; drop proile information for the dropped code object
+    #t)
+  (equal?
+    (filter (lambda (x) (equal? (cadr x) "testfile-cp2.ss")) (profile-dump-list))
+    '((177 "testfile-cp2.ss" 49 146 4 7)
+      (177 "testfile-cp2.ss" 64 73 5 10)
+      (177 "testfile-cp2.ss" 65 68 5 11)
+      (177 "testfile-cp2.ss" 69 70 5 15)
+      (177 "testfile-cp2.ss" 71 72 5 17)
+      (143 "testfile-cp2.ss" 86 95 6 10)
+      (143 "testfile-cp2.ss" 87 90 6 11)
+      (143 "testfile-cp2.ss" 91 92 6 15)
+      (143 "testfile-cp2.ss" 93 94 6 17)
+      (88 "testfile-cp2.ss" 113 144 7 15)
+      (88 "testfile-cp2.ss" 114 115 7 16)
+      (88 "testfile-cp2.ss" 116 129 7 18)
+      (88 "testfile-cp2.ss" 117 120 7 19)
+      (88 "testfile-cp2.ss" 121 128 7 23)
+      (88 "testfile-cp2.ss" 122 123 7 24)
+      (88 "testfile-cp2.ss" 124 125 7 26)
+      (88 "testfile-cp2.ss" 126 127 7 28)
+      (88 "testfile-cp2.ss" 130 143 7 32)
+      (88 "testfile-cp2.ss" 131 134 7 33)
+      (88 "testfile-cp2.ss" 135 142 7 37)
+      (88 "testfile-cp2.ss" 136 137 7 38)
+      (88 "testfile-cp2.ss" 138 139 7 40)
+      (88 "testfile-cp2.ss" 140 141 7 42)
+      (55 "testfile-cp2.ss" 96 97 6 20)
+      (34 "testfile-cp2.ss" 74 75 5 20)))
   (eqv? (profile-clear) (void))
   (begin
     (with-output-to-file "testfile.ss"
@@ -1897,7 +2049,7 @@
         (pretty-print
           '(define f (lambda () 0))))
       'replace)
-    (parameterize ([compile-profile #t]) (load "testfile.ss"))
+    (parameterize ([compile-profile #t]) (load "testfile.ss" compile))
     #t)
   (begin
     (with-output-to-file "testfile.ss"
@@ -1990,6 +2142,30 @@
       (1 "testfile-triv.ss" 30 60 2 1)
       (5 "testfile-triv.ss" 42 59 2 13)))
   (eqv? (profile-clear) (void))
+)
+
+(mat generate-procedure-source-information
+  (begin
+    (define the-source
+      (let ([sfd (make-source-file-descriptor "the-source.ss" (open-bytevector-input-port '#vu8()))])
+        (make-source-object sfd 10 20)))
+    (define (make-proc full-inspect?)
+      (parameterize ([generate-inspector-information full-inspect?]
+                     [generate-procedure-source-information #t])
+        (let ([e '(lambda (x) x)])
+          (compile (make-annotation e the-source e)))))
+    (define proc-i (make-proc #t))
+    (define proc-n (make-proc #f))
+    (and (procedure? proc-i)
+         (procedure? proc-n)))
+  (equal? (((inspect/object proc-i) 'code) 'source-object)
+          the-source)
+  (equal? (((inspect/object proc-n) 'code) 'source-object)
+          the-source)
+  (equal? ((((inspect/object proc-i) 'code) 'source) 'value)
+          '(lambda (x) x))
+  (equal? (((inspect/object proc-n) 'code) 'source)
+          #f)
 )
 
 (mat strip-fasl-file
@@ -4842,6 +5018,20 @@
           (pariah 1)
           (* n (f (fx- n 1)))))
     3628800)
+  ; make sure that cp0 doesn't remove the pariah form
+  (equivalent-expansion?
+    (parameterize ([enable-cp0 #t] [#%$suppress-primitive-inlining #f])
+      (expand/optimize
+        '(if (zero? (random 1000))
+             (pariah (display 0))
+             (display 1))))
+    (if (= (optimize-level) 3)
+        '(if (#3%zero? (#3%random 1000))
+             (begin (pariah (void)) (#3%display 0))
+             (#3%display 1))
+        '(if (#2%zero? (#2%random 1000))
+             (begin (pariah (void)) (#2%display 0))
+             (#2%display 1))))
 )
 
 (mat $read-time-stamp-counter
@@ -4872,3 +5062,109 @@
                         (fx+ success 1)
                         success)))))))
 )
+
+(mat procedure-arity-mask
+  (equal? (procedure-arity-mask (lambda () #f)) 1)
+  (equal? (procedure-arity-mask (lambda (x) x)) 2)
+  (equal? (procedure-arity-mask (lambda (x y z w) x)) 16)
+  (or (eq? (current-eval) interpret)
+      (equal? (procedure-arity-mask (lambda (x y z w a b c d e f g h i j) x)) (ash 1 14)))
+  (or (eq? (current-eval) interpret)
+      (and
+        (equal? (procedure-arity-mask (case-lambda)) 0)
+        (equal? (procedure-arity-mask (case-lambda [(x) x] [(x y) y])) 6)
+        (equal? (procedure-arity-mask (case-lambda [() x] [(x . y) y])) -1)
+        (equal? (procedure-arity-mask (case-lambda [() x] [(x y . z) y])) (bitwise-not 2))
+        (equal? (procedure-arity-mask (case-lambda [(x y . z) y] [() x])) (bitwise-not 2))
+        (equal? (procedure-arity-mask (case-lambda [(x) x] [(x y) y] [(x y z) z])) 14)))
+  (equal? (procedure-arity-mask list) -1)
+  (equal? (procedure-arity-mask cons) 4)
+  (equal? (procedure-arity-mask list*) (bitwise-not 1))
+
+  (equal? (procedure-arity-mask +) -1)
+  (equal? (procedure-arity-mask -) -2)
+  (equal? (procedure-arity-mask max) -2)
+
+  (equal? (call/cc procedure-arity-mask) -1)
+  (equal? (call/1cc procedure-arity-mask) -1)
+  (equal? (procedure-arity-mask #%$null-continuation) 0)
+  (equal?
+    (parameterize ([enable-cp0 #t]) (compile '(procedure-arity-mask
+                                                (case-lambda [a a] [(b) b]))))
+    -1)
+  (equal?
+    (parameterize ([enable-cp0 #f]) (compile '(procedure-arity-mask
+                                                (case-lambda [a a] [(b) b]))))
+    -1)
+
+  (error? ; invalid argument
+    (procedure-arity-mask 17))
+  )
+
+(mat procedure-name
+  (begin
+    (define (procedure-name f)
+      (((inspect/object f) 'code) 'name))
+    (define (ok-name? name expect)
+      (or (equal? name expect)
+          ;; interpreter currently doesn't keep names
+          (eq? (current-eval) interpret)))
+    (define should-be-named-f (let ([f (lambda (x) x)]) f))
+    (define should-be-named-g (letrec ([g (lambda (x) x)]) g))
+    (define should-be-named-h (let ([f (let ([h (lambda (x) x)]) h)]) f))
+    (define should-be-named-i (letrec ([f (let ([i (lambda (x) x)]) i)]) f))
+    (define should-be-named-j (let ([f (letrec ([j (lambda (x) x)]) j)]) f))
+    #t)
+  (ok-name? (procedure-name procedure-name) "procedure-name")
+  (ok-name? (procedure-name should-be-named-f) "f")
+  (ok-name? (procedure-name should-be-named-g) "g")
+  (ok-name? (procedure-name should-be-named-h) "h")
+  (ok-name? (procedure-name should-be-named-i) "i")
+  (ok-name? (procedure-name should-be-named-j) "j"))
+
+(mat fasl-immutable
+  (begin
+    (define immutable-objs (list (vector->immutable-vector '#(1 2 3))
+                                 (fxvector->immutable-fxvector '#vfx(1 2 3))
+                                 (string->immutable-string "abc")
+                                 (bytevector->immutable-bytevector #vu8(1 2 3))
+                                 (box-immutable 1)))
+    (define immutable-zero-objs (list (vector->immutable-vector '#())
+                                      (fxvector->immutable-fxvector '#vfx())
+                                      (string->immutable-string "")
+                                      (bytevector->immutable-bytevector #vu8())
+                                      (box-immutable 1)))
+    (define (immutable? l)
+      (and (immutable-vector? (list-ref l 0))
+           (immutable-fxvector? (list-ref l 1))
+           (immutable-string? (list-ref l 2))
+           (immutable-bytevector? (list-ref l 3))
+           (immutable-box? (list-ref l 4))))
+    (define (round-trip l)
+      (let-values ([(o get) (open-bytevector-output-port)])
+        (fasl-write l o)
+        (immutable? (fasl-read (open-bytevector-input-port (get))))))
+    (define (round-trip-via-strip l)
+      (compile-to-file (list `(set! fasl-immutable-round-trip ',l)) "testfile-immut-sff.so")
+      (strip-fasl-file "testfile-immut-sff.so" "testfile-immut-sff.so" (fasl-strip-options))
+      (load "testfile-immut-sff.so")
+      (let ([l2 (eval 'fasl-immutable-round-trip)])
+        (and (equal? l l2)
+             (immutable? l2))))
+    #t)
+
+  (immutable? immutable-objs)
+  (immutable? immutable-zero-objs)
+  (round-trip immutable-objs)
+  (round-trip immutable-zero-objs)
+  (round-trip-via-strip immutable-objs)
+  (round-trip-via-strip immutable-zero-objs)
+
+  ;; Make sure `fasl-read` didn't mark "mutable" null values
+  ;; as immutable:
+  (mutable-vector? '#())
+  (mutable-fxvector? '#vfx())
+  (mutable-string? "")
+  (mutable-bytevector? '#vu8())
+  
+ )

@@ -1,6 +1,6 @@
 "io.ss"
 ;;; io.ss
-;;; Copyright 1984-2016 Cisco Systems, Inc.
+;;; Copyright 1984-2017 Cisco Systems, Inc.
 ;;;
 ;;; Licensed under the Apache License, Version 2.0 (the "License");
 ;;; you may not use this file except in compliance with the License.
@@ -645,14 +645,17 @@ implementation notes:
 
   (define binary-file-port-close-port
     (lambda (who p)
-      (unregister-open-file p)
-      (let ([msg ($close-fd ($port-info p) (port-gz-mode p))])
-        (unless (eq? #t msg) (port-oops who p msg)))
-      (mark-port-closed! p)
       (when (input-port? p)
         (set-port-eof! p #f)
         (set-binary-port-input-size! p 0))
-      (when (output-port? p) (set-binary-port-output-size! p 0))))
+      (when (output-port? p) (set-binary-port-output-size! p 0))
+      (unregister-open-file p)
+      ; mark port closed before closing fd.  if an interrupt occurs, we'd prefer
+      ; that the fd's resources never be freed than to have an open port floating
+      ; around with fd resources that have already been freed.
+      (mark-port-closed! p)
+      (let ([msg ($close-fd ($port-info p) (port-gz-mode p))])
+        (unless (eq? #t msg) (port-oops who p msg)))))
 
   (define-syntax binary-file-port-port-position
     (syntax-rules ()

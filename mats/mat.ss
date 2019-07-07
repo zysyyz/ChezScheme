@@ -1,5 +1,5 @@
 ;;; mat.ss
-;;; Copyright 1984-2016 Cisco Systems, Inc.
+;;; Copyright 1984-2017 Cisco Systems, Inc.
 ;;; 
 ;;; Licensed under the Apache License, Version 2.0 (the "License");
 ;;; you may not use this file except in compliance with the License.
@@ -19,7 +19,17 @@
 (eval-when (load eval)
   (define-syntax mat
     (lambda (x)
-      (syntax-case x ()
+      (syntax-case x (parameters)
+        [(_ x (parameters [param val ...] ...) e ...)
+         #'(let f ([p* (list param ...)] [v** (list (list val ...) ...)])
+             (if (null? p*)
+                 (mat x e ...)
+                 (let ([p (car p*)])
+                   (for-each
+                     (lambda (v)
+                       (parameterize ([p v])
+                         (f (cdr p*) (cdr v**))))
+                     (car v**)))))]
         [(_ x e ...)
          (with-syntax ([(source ...)
                         (map (lambda (clause)
@@ -162,7 +172,7 @@
           (let ()
             (let ([sfd (source-object-sfd src)] [fp (source-object-bfp src)])
               (call-with-values
-                (lambda () (#%$locate-source sfd fp))
+                (lambda () (#%$locate-source sfd fp #t))
                 (case-lambda
                   [() (fprintf *mat-output* "~a at char ~a of ~a~%" msg fp (source-file-descriptor-path sfd))]
                   [(path line char) (fprintf *mat-output* "~a at line ~a, char ~a of ~a~%" msg line char path)]))))
@@ -260,38 +270,52 @@
  ; same modulo renaming of gensyms
  ; procedure in either input is used as predicate for other
   (lambda (x y)
-    (let ([alist '()])
-      (let e? ([x x] [y y])
-        (cond
-          [(procedure? x) (x y)]
-          [(procedure? y) (y x)]
-          [(eqv? x y) #t]
-          [(pair? x)
-           (and (pair? y) (e? (car x) (car y)) (e? (cdr x) (cdr y)))]
-          [(or (and (gensym? x) (symbol? y))
-               (and (gensym? y) (symbol? x)))
-           (cond
-             [(assq x alist) => (lambda (a) (eq? y (cdr a)))]
-             [else (set! alist (cons `(,x . ,y) alist)) #t])]
-          [(string? x) (and (string? y) (string=? x y))]
-          [(bytevector? x) (and (bytevector? y) (bytevector=? x y))]
-          [(vector? x)
-           (and (vector? y)
-                (fx= (vector-length x) (vector-length y))
-                (let f ([i (fx- (vector-length x) 1)])
-                  (or (fx< i 0)
-                      (and (e? (vector-ref x i) (vector-ref y i))
-                           (f (fx1- i))))))]
-          [(fxvector? x)
-           (and (fxvector? y)
-                (fx= (fxvector-length x) (fxvector-length y))
-                (let f ([i (fx- (fxvector-length x) 1)])
-                  (if (fx< i 0)
-                      k
-                      (and (fx= (fxvector-ref x i) (fxvector-ref y i))
-                           (f (fx1- i))))))]
-          [(box? x) (and (box? y) (e? (unbox x) (unbox y)))]
-          [else #f])))))
+    (let ([alist '()] [oops? #f])
+      (or (let e? ([x x] [y y])
+            (or (cond
+                  [(procedure? x) (x y)]
+                  [(procedure? y) (y x)]
+                  [(eqv? x y) #t]
+                  [(pair? x)
+                   (and (pair? y) (e? (car x) (car y)) (e? (cdr x) (cdr y)))]
+                  [(or (and (gensym? x) (symbol? y))
+                       (and (gensym? y) (symbol? x)))
+                   (cond
+                     [(assq x alist) => (lambda (a) (eq? y (cdr a)))]
+                     [else (set! alist (cons `(,x . ,y) alist)) #t])]
+                  [(string? x) (and (string? y) (string=? x y))]
+                  [(bytevector? x) (and (bytevector? y) (bytevector=? x y))]
+                  [(vector? x)
+                   (and (vector? y)
+                        (fx= (vector-length x) (vector-length y))
+                        (let f ([i (fx- (vector-length x) 1)])
+                          (or (fx< i 0)
+                              (and (e? (vector-ref x i) (vector-ref y i))
+                                   (f (fx1- i))))))]
+                  [(fxvector? x)
+                   (and (fxvector? y)
+                        (fx= (fxvector-length x) (fxvector-length y))
+                        (let f ([i (fx- (fxvector-length x) 1)])
+                          (if (fx< i 0)
+                              k
+                              (and (fx= (fxvector-ref x i) (fxvector-ref y i))
+                                   (f (fx1- i))))))]
+                  [(box? x) (and (box? y) (e? (unbox x) (unbox y)))]
+                  [else #f])
+                (begin
+                  (unless oops?
+                    (set! oops? #t)
+                    (printf "failure in equivalent-expansion?:\n")
+                    (pretty-print x)
+                    (printf "is not equivalent to\n")
+                    (pretty-print y))
+                  #f)))
+          (begin
+            (printf "original expressions:\n")
+            (pretty-print x)
+            (printf "is not equivalent to\n")
+            (pretty-print y)
+            #f)))))
 
 (define *fuzz* 1e-14)
 
@@ -366,6 +390,7 @@
                   (open-process-ports (format "~a -q" (patch-exec-path *scheme*))
                     (buffer-mode block)
                     (native-transcoder))])
+      (pretty-print `(#%$enable-check-prelex-flags ,(#%$enable-check-prelex-flags)) to-stdin)
       (for-each (lambda (expr) (pretty-print expr to-stdin)) expr*)
       (close-port to-stdin)
       (let* ([stdout-stuff (slurp from-stdout)]
@@ -449,3 +474,15 @@
     (with-output-to-file filename
       (lambda () (for-each pretty-print expr*))
       'replace)))
+
+(define touch
+  (lambda (objfn srcfn)
+    (let loop ()
+      (let ([p (open-file-input/output-port srcfn (file-options no-fail no-truncate))])
+        (put-u8 p (lookahead-u8 p))
+        (close-port p))
+      (when (file-exists? objfn)
+        (unless (time>? (file-modification-time srcfn) (file-modification-time objfn))
+          (sleep (make-time 'time-duration 1000000 1))
+          (loop))))
+    #t))

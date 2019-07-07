@@ -1,7 +1,7 @@
 #! /bin/sh
 
 # configure
-# Copyright 1984-2016 Cisco Systems, Inc.
+# Copyright 1984-2017 Cisco Systems, Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -37,11 +37,29 @@ installman=""
 installschemename="scheme"
 installpetitename="petite"
 installscriptname="scheme-script"
+disablex11=no
+: ${CC:="gcc"}
 : ${CPPFLAGS:=""}
 : ${CFLAGS:=""}
 : ${LDFLAGS:=""}
+zlibInc=-I../zlib
+LZ4Inc=-I../lz4/lib
+zlibDep=../zlib/libz.a
+LZ4Dep=../lz4/lib/liblz4.a
+zlibLib=../zlib/libz.a
+LZ4Lib=../lz4/lib/liblz4.a
+zlibHeaderDep="../zlib/zconf.h ../zlib/zlib.h"
+LZ4HeaderDep="../lz4/lib/lz4.h ../lz4/lib/lz4frame.h"
 
-case `uname` in
+# On WSL, set OS to "Windows_NT" to create a Windows
+# build instead of a Linux (on Windows) build:
+if [ "$OS" = "Windows_NT" ] ; then
+    CONFIG_UNAME="CYGWIN_NT-"
+else
+    CONFIG_UNAME=`uname`
+fi
+
+case "${CONFIG_UNAME}" in
   Linux)
     if uname -a | egrep 'i386|i686|amd64|athlon|x86_64' > /dev/null 2>&1 ; then
       m32=i3le
@@ -191,6 +209,12 @@ while [ $# != 0 ] ; do
     --help)
       help=yes
       ;;
+    --disable-x11)
+      disablex11=yes
+      ;;
+    CC=*)
+      CC=`echo $1 | sed -e 's/^CC=//'`
+      ;;
     CPPFLAGS=*)
       CPPFLAGS=`echo $1 | sed -e 's/^CPPFLAGS=//'`
       ;;
@@ -199,6 +223,18 @@ while [ $# != 0 ] ; do
       ;;
     LDFLAGS=*)
       LDFLAGS=`echo $1 | sed -e 's/^LDFLAGS=//'`
+      ;;
+    ZLIB=*)
+      zlibLib=`echo $1 | sed -e 's/^ZLIB=//'`
+      zlibInc=
+      zlibDep=
+      zlibHeaderDep=
+      ;;
+    LZ4=*)
+      LZ4Lib=`echo $1 | sed -e 's/^LZ4=//'`
+      LZ4Inc=
+      LZ4Dep=
+      LZ4HeaderDep=
       ;;
     *)
       echo "option '$1' unrecognized or missing an argument; try $0 --help"
@@ -244,6 +280,14 @@ if [ "$installman" = "" ] ; then
   installman=$installprefix/$installmansuffix
 fi
 
+if [ "$disablex11" = "no" ] ; then
+  if [ $m = a6osx ] || [ $m = ta6osx ] ; then
+    if [ ! -d /opt/X11/include/ ] ; then
+      disablex11=yes
+    fi
+  fi
+fi
+
 if [ "$help" = "yes" ]; then
   echo "Purpose:"
   echo "  $0 determines the machine type and constructs a custom Makefile"
@@ -254,6 +298,7 @@ if [ "$help" = "yes" ]; then
   echo "  -m=<machine type>                 same as --machine <machine type> ($m)"
   echo "  --threads                         specify threaded version ($threads)"
   echo "  --32|--64                         specify 32/64-bit version ($bits)"
+  echo "  --disable-x11                     disabling x11"
   echo "  --installprefix=<pathname>        final installation root ($installprefix)"
   echo "  --installbin=<pathname>           bin directory ($installbin)"
   echo "  --installlib=<pathname>           lib directory ($installlib)"
@@ -269,6 +314,8 @@ if [ "$help" = "yes" ]; then
   echo "  CPPFLAGS=<C preprocessor flags>   additional C preprocessor flags ($CPPFLAGS)"
   echo "  CFLAGS=<C compiler flags>         additional C compiler flags ($CFLAGS)"
   echo "  LDFLAGS=<linker flags>            additional linker flags ($LDFLAGS)"
+  echo "  ZLIB=<lib>                        link to static <lib> instead of own zlib"
+  echo "  LZ4=<lib>                         link to static <lib> instead of own LZ4"
   echo ""
   echo "Available machine types: $machs"
   echo ""
@@ -298,19 +345,31 @@ if [ "$m" = "" -o ! -f boot/$m/scheme.boot ] ; then
   exit 1
 fi
 
-if [ -d '.git' ] ; then
+if [ -d '.git' ] && command -v git >/dev/null 2>&1 ; then
   git submodule init && git submodule update || exit 1
 else
   if [ ! -f 'nanopass/nanopass.ss' ] ; then
-    rmdir nanopass && (curl  -L -o v1.9.tar.gz https://github.com/nanopass/nanopass-framework-scheme/archive/v1.9.tar.gz && tar -zxf v1.9.tar.gz && mv nanopass-framework-scheme-1.9 nanopass && rm v1.9.tar.gz) || exit 1
+    rmdir nanopass > /dev/null 2>&1
+    (curl  -L -o v1.9.tar.gz https://github.com/nanopass/nanopass-framework-scheme/archive/v1.9.tar.gz && tar -zxf v1.9.tar.gz && mv nanopass-framework-scheme-1.9 nanopass && rm v1.9.tar.gz) || exit 1
   fi
 
-  if [ ! -f 'zlib/configure' ] ; then
-    rmdir zlib && (curl -L -o v1.2.8.tar.gz https://github.com/madler/zlib/archive/v1.2.8.tar.gz && tar -xzf v1.2.8.tar.gz && mv zlib-1.2.8 zlib && rm v1.2.8.tar.gz) || exit 1
+  if [ "${zlibDep}" != "" ] ; then
+    if [ ! -f 'zlib/configure' ] ; then
+      rmdir zlib > /dev/null 2>&1
+      (curl -L -o v1.2.11.tar.gz https://github.com/madler/zlib/archive/v1.2.11.tar.gz && tar -xzf v1.2.11.tar.gz && mv zlib-1.2.11 zlib && rm v1.2.11.tar.gz) || exit 1
+    fi
+  fi
+  
+  if [ "${LZ4Dep}" != "" ] ; then
+    if [ ! -f 'lz4/lib/Makefile' ] ; then
+      rmdir lz4 > /dev/null 2>&1
+      (curl -L -o v1.8.3.tar.gz https://github.com/lz4/lz4/archive/v1.8.3.tar.gz && tar -xzf v1.8.3.tar.gz && mv lz4-1.8.3 lz4 && rm v1.8.3.tar.gz) || exit 1
+    fi
   fi
 
   if [ ! -f 'stex/Mf-stex' ] ; then
-    rmdir stex && (curl -L -o v1.2.1.tar.gz https://github.com/dybvig/stex/archive/v1.2.1.tar.gz && tar -zxf v1.2.1.tar.gz && mv stex-1.2.1 stex && rm v1.2.1.tar.gz) || exit 1
+    rmdir stex > /dev/null 2>&1
+    (curl -L -o v1.2.1.tar.gz https://github.com/dybvig/stex/archive/v1.2.1.tar.gz && tar -zxf v1.2.1.tar.gz && mv stex-1.2.1 stex && rm v1.2.1.tar.gz) || exit 1
   fi
 fi
 
@@ -320,6 +379,12 @@ sed -e 's/$(m)/'$m'/g'\
     -e 's/$(workarea)/'$w'/g'\
   makefiles/Makefile.in > Makefile
 
+sed -e 's/$(m)/'$m'/g'\
+    makefiles//Makefile-csug.in > csug/Makefile
+
+sed -e 's/$(m)/'$m'/g'\
+    makefiles//Makefile-release_notes.in > release_notes/Makefile
+
 cat makefiles/Makefile-workarea.in > $w/Makefile
 
 sed -e 's/$(m)/'$m'/g'\
@@ -327,7 +392,6 @@ sed -e 's/$(m)/'$m'/g'\
     makefiles/Mf-boot.in > $w/Mf-boot
 
 sed -e "s;^m=none\$;m=$m;"\
-    -e "s;^InstallPrefix=.*\$;InstallPrefix=$installprefix;"\
     -e "s;^InstallBin=.*\$;InstallBin=$installbin;"\
     -e "s;^InstallLib=.*\$;InstallLib=$installlib;"\
     -e "s;^InstallMan=.*\$;InstallMan=$installman/man1;"\
@@ -347,8 +411,21 @@ cat > $w/c/config.h << END
 #endif
 END
 
+if [ "$disablex11" = "yes" ]; then
+  echo '#define DISABLE_X11' >> $w/c/config.h
+fi
+
 cat > $w/c/Mf-config << END
+CC=$CC
 CPPFLAGS=$CPPFLAGS
 CFLAGS=$CFLAGS
 LDFLAGS=$LDFLAGS
+zlibInc=$zlibInc
+LZ4Inc=$LZ4Inc
+zlibDep=$zlibDep
+LZ4Dep=$LZ4Dep
+zlibLib=$zlibLib
+LZ4Lib=$LZ4Lib
+zlibHeaderDep=$zlibHeaderDep
+LZ4HeaderDep=$LZ4HeaderDep
 END

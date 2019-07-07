@@ -1,5 +1,5 @@
 ;;; strip.ss
-;;; Copyright 1984-2016 Cisco Systems, Inc.
+;;; Copyright 1984-2017 Cisco Systems, Inc.
 ;;; 
 ;;; Licensed under the Apache License, Version 2.0 (the "License");
 ;;; you may not use this file except in compliance with the License.
@@ -25,17 +25,17 @@
     (tuple ty vfasl)
     (string ty string)
     (gensym pname uname)
-    (vector vfasl)
-    (fxvector viptr)
-    (bytevector bv)
-    (record ty size nflds rtd pad-ty* fld*)
+    (vector ty vfasl)
+    (fxvector ty viptr)
+    (bytevector ty bv)
+    (record maybe-uid size nflds rtd pad-ty* fld*) ; maybe-uid => rtd
     (closure offset c)
     (flonum high low)
     (small-integer iptr)
     (large-integer sign vuptr)
-    (eq-hashtable mutable? weak? minlen veclen vpfasl)
+    (eq-hashtable mutable? subtype minlen veclen vpfasl)
     (symbol-hashtable mutable? minlen equiv veclen vpfasl)
-    (code flags free name info pinfo* bytes m vreloc)
+    (code flags free name arity-mask info pinfo* bytes m vreloc)
     (atom ty uptr)
     (reloc type-etc code-offset item-offset fasl)
     (indirect g i)
@@ -172,11 +172,18 @@
             (vector-set! v i
               (let ([key (read-fasl p g)])
                 (cons key (read-fasl p g))))))))
+    (define (read-record p g maybe-uid)
+      (let* ([size (read-uptr p)] [nflds (read-uptr p)] [rtd (read-fasl p g)])
+        (let loop ([n nflds] [rpad-ty* '()] [rfld* '()])
+          (if (fx= n 0)
+              (fasl-record maybe-uid size nflds rtd (reverse rpad-ty*) (reverse rfld*))
+              (let* ([pad-ty (read-byte p)] [fld (read-fld p g (fxlogand pad-ty #x0f))])
+                (loop (fx- n 1) (cons pad-ty rpad-ty*) (cons fld rfld*)))))))
     (define (read-fasl p g)
       (let ([ty (read-byte p)])
         (fasl-type-case ty
           [(fasl-type-pair) (fasl-pair (read-vfasl p g (+ (read-uptr p) 1)))]
-          [(fasl-type-box) (fasl-tuple ty (vector (read-fasl p g)))]
+          [(fasl-type-box fasl-type-immutable-box) (fasl-tuple ty (vector (read-fasl p g)))]
           [(fasl-type-symbol) (fasl-string ty (read-string p))]
           [(fasl-type-gensym)
            (let* ([pname (read-string p)] [uname (read-string p)])
@@ -184,29 +191,26 @@
           [(fasl-type-ratnum fasl-type-exactnum fasl-type-inexactnum fasl-type-weak-pair)
            (let ([first (read-fasl p g)])
              (fasl-tuple ty (vector first (read-fasl p g))))]
-          [(fasl-type-vector) (fasl-vector (read-vfasl p g (read-uptr p)))]
-          [(fasl-type-fxvector)
+          [(fasl-type-vector fasl-type-immutable-vector) (fasl-vector ty (read-vfasl p g (read-uptr p)))]
+          [(fasl-type-fxvector fasl-type-immutable-fxvector)
            (fasl-fxvector
+             ty
              (let ([n (read-uptr p)])
                (let ([v (make-vector n)])
                  (do ([i 0 (fx+ i 1)])
                      ((fx= i n) v)
                    (vector-set! v i (read-iptr p))))))]
-          [(fasl-type-bytevector)
+          [(fasl-type-bytevector fasl-type-immutable-bytevector)
            (fasl-bytevector
+             ty
              (let ([n (read-uptr p)])
                (let ([bv (make-bytevector n)])
                  (do ([i 0 (fx+ i 1)])
                      ((fx= i n) bv)
                    (bytevector-u8-set! bv i (read-byte p))))))]
           [(fasl-type-base-rtd) (fasl-tuple ty '#())]
-          [(fasl-type-rtd fasl-type-record)
-           (let* ([size (read-uptr p)] [nflds (read-uptr p)] [rtd (read-fasl p g)])
-             (let loop ([n nflds] [rpad-ty* '()] [rfld* '()])
-               (if (fx= n 0)
-                   (fasl-record ty size nflds rtd (reverse rpad-ty*) (reverse rfld*))
-                   (let* ([pad-ty (read-byte p)] [fld (read-fld p g (fxlogand pad-ty #x0f))])
-                     (loop (fx- n 1) (cons pad-ty rpad-ty*) (cons fld rfld*))))))]
+          [(fasl-type-rtd) (read-record p g (read-fasl p g))]
+          [(fasl-type-record) (read-record p g #f)]
           [(fasl-type-closure)
            (let* ([offset (read-uptr p)]
                   [c (read-fasl p g)])
@@ -215,7 +219,7 @@
            (let* ([high (read-uptr p)]
                   [low (read-uptr p)])
              (fasl-flonum high low))]
-          [(fasl-type-string) (fasl-string ty (read-string p))]
+          [(fasl-type-string fasl-type-immutable-string) (fasl-string ty (read-string p))]
           [(fasl-type-small-integer) (fasl-small-integer (read-iptr p))]
           [(fasl-type-large-integer)
            (let* ([sign (read-byte p)]
@@ -227,11 +231,11 @@
                    (vector-set! v i (read-uptr p))))))]
           [(fasl-type-eq-hashtable)
            (let* ([mutable? (read-byte p)]
-                  [weak? (read-byte p)]
+                  [subtype (read-byte p)]
                   [minlen (read-uptr p)]
                   [veclen (read-uptr p)]
                   [v (read-vpfasl p g)])
-             (fasl-eq-hashtable mutable? weak? minlen veclen v))]
+             (fasl-eq-hashtable mutable? subtype minlen veclen v))]
           [(fasl-type-symbol-hashtable)
            (let* ([mutable? (read-byte p)]
                   [minlen (read-uptr p)]
@@ -244,6 +248,7 @@
                   [free (read-uptr p)]
                   [nbytes (read-uptr p)]
                   [name (read-fasl p g)]
+                  [arity-mask (read-fasl p g)]
                   [info (read-fasl p g)]
                   [pinfo* (read-fasl p g)]
                   [bytes (let ([bv (make-bytevector nbytes)])
@@ -260,7 +265,7 @@
                                   (loop
                                     (fx+ n (if (fxlogtest type-etc 1) 3 1))
                                     (cons (fasl-reloc type-etc code-offset item-offset (read-fasl p g)) rls)))))])
-             (fasl-code flags free name info pinfo* bytes m vreloc))]
+             (fasl-code flags free name arity-mask info pinfo* bytes m vreloc))]
           [(fasl-type-immediate fasl-type-entry fasl-type-library fasl-type-library-code)
            (fasl-atom ty (read-uptr p))]
           [(fasl-type-graph) (read-fasl p (make-vector (read-uptr p) #f))]
@@ -323,9 +328,9 @@
       (define fasl-record?
         (lambda (uname x)
           (fasl-case (follow-indirect x)
-            [record (ty size nflds rtd pad-ty* fld*)
+            [record (maybe-uid size nflds rtd pad-ty* fld*)
               (fasl-case (follow-indirect rtd)
-                [record (rtd-ty rtd-size rtd-nflds rtd-rtd rtd-pad-ty* rtd-fld*)
+                [record (rtd-uid rtd-size rtd-nflds rtd-rtd rtd-pad-ty* rtd-fld*)
                   (and (> (length rtd-fld*) uid-index)
                        (field-case (list-ref rtd-fld* uid-index)
                          [ptr (fasl)
@@ -348,7 +353,7 @@
               (unless (fasl-record? uname x)
                 (sorry! "unexpected type of object ~s" x))
               (fasl-case (follow-indirect x)
-                [record (ty size nflds rtd pad-ty* fld*)
+                [record (maybe-uid size nflds rtd pad-ty* fld*)
                   (unless (> (length fld*) index)
                     (sorry! "fewer fields than expected for ~s" x))
                   (let ([fld (list-ref fld* index)])
@@ -395,14 +400,15 @@
           [tuple (ty vfasl) (build-graph! x t (build-vfasl! vfasl))]
           [string (ty string) (build-graph! x t void)]
           [gensym (pname uname) (build-graph! x t void)]
-          [vector (vfasl) (build-graph! x t (build-vfasl! vfasl))]
-          [fxvector (viptr) (build-graph! x t void)]
-          [bytevector (viptr) (build-graph! x t void)]
-          [record (ty size nflds rtd pad-ty* fld*)
+          [vector (ty vfasl) (build-graph! x t (build-vfasl! vfasl))]
+          [fxvector (ty viptr) (build-graph! x t void)]
+          [bytevector (ty viptr) (build-graph! x t void)]
+          [record (maybe-uid size nflds rtd pad-ty* fld*)
            (if (and strip-source-annotations? (fasl-annotation? x))
                (build! (fasl-annotation-stripped x) t)
                (build-graph! x t
                  (lambda ()
+                   (when maybe-uid (build! maybe-uid t))
                    (build! rtd t)
                    (for-each (lambda (fld)
                                (field-case fld
@@ -413,7 +419,7 @@
           [flonum (high low) (build-graph! x t void)]
           [small-integer (iptr) (void)]
           [large-integer (sign vuptr) (build-graph! x t void)]
-          [eq-hashtable (mutable? weak? minlen veclen vpfasl)
+          [eq-hashtable (mutable? subtype minlen veclen vpfasl)
            (build-graph! x t
              (lambda ()
                (vector-for-each
@@ -429,10 +435,11 @@
                    (build! (car pfasl) t)
                    (build! (cdr pfasl) t))
                  vpfasl)))]
-          [code (flags free name info pinfo* bytes m vreloc)
+          [code (flags free name arity-mask info pinfo* bytes m vreloc)
            (build-graph! x t
              (lambda ()
                (build! name t)
+               (build! arity-mask t)
                (unless strip-inspector-information? (build! info t))
                (unless strip-profile-information? (build! pinfo* t))
                (vector-for-each (lambda (reloc) (build! reloc t)) vreloc)))]
@@ -516,30 +523,34 @@
                (write-byte p (constant fasl-type-gensym))
                (write-string p pname)
                (write-string p uname)))]
-          [vector (vfasl)
+          [vector (ty vfasl)
            (write-graph p t x
              (lambda ()
-               (write-byte p (constant fasl-type-vector))
+               (write-byte p ty)
                (write-uptr p (vector-length vfasl))
                (vector-for-each (lambda (fasl) (write-fasl p t fasl)) vfasl)))]
-          [fxvector (viptr)
+          [fxvector (ty viptr)
            (write-graph p t x
              (lambda ()
-               (write-byte p (constant fasl-type-fxvector))
+               (write-byte p ty)
                (write-uptr p (vector-length viptr))
                (vector-for-each (lambda (iptr) (write-iptr p iptr)) viptr)))]
-          [bytevector (bv)
+          [bytevector (ty bv)
            (write-graph p t x
              (lambda ()
-               (write-byte p (constant fasl-type-bytevector))
+               (write-byte p ty)
                (write-uptr p (bytevector-length bv))
                (put-bytevector p bv)))]
-          [record (ty size nflds rtd pad-ty* fld*)
+          [record (maybe-uid size nflds rtd pad-ty* fld*)
            (if (and strip-source-annotations? (fasl-annotation? x))
                (write-fasl p t (fasl-annotation-stripped x))
                (write-graph p t x
                  (lambda ()
-                   (write-byte p ty)
+                   (if maybe-uid
+                       (begin
+                         (write-byte p (constant fasl-type-rtd))
+                         (write-fasl p t maybe-uid))
+                       (write-byte p (constant fasl-type-record)))
                    (write-uptr p size)
                    (write-uptr p nflds)
                    (write-fasl p t rtd)
@@ -573,12 +584,12 @@
                (write-byte p sign)
                (write-uptr p (vector-length vuptr))
                (vector-for-each (lambda (uptr) (write-uptr p uptr)) vuptr)))]
-          [eq-hashtable (mutable? weak? minlen veclen vpfasl)
+          [eq-hashtable (mutable? subtype minlen veclen vpfasl)
            (write-graph p t x
              (lambda ()
                (write-byte p (constant fasl-type-eq-hashtable))
                (write-byte p mutable?)
-               (write-byte p weak?)
+               (write-byte p subtype)
                (write-uptr p minlen)
                (write-uptr p veclen)
                (write-uptr p (vector-length vpfasl))
@@ -601,7 +612,7 @@
                    (write-fasl p t (car pfasl))
                    (write-fasl p t (cdr pfasl)))
                  vpfasl)))]
-          [code (flags free name info pinfo* bytes m vreloc)
+          [code (flags free name arity-mask info pinfo* bytes m vreloc)
            (write-graph p t x
              (lambda ()
                (write-byte p (constant fasl-type-code))
@@ -609,6 +620,7 @@
                (write-uptr p free)
                (write-uptr p (bytevector-length bytes))
                (write-fasl p t name)
+               (write-fasl p t arity-mask)
                (if strip-inspector-information?
                    (write-fasl p t (fasl-atom (constant fasl-type-immediate) (constant sfalse)))
                    (write-fasl p t info))
@@ -690,21 +702,21 @@
             (fasl-case x
               [closure (offset c) #t]
               [revisit (fasl) #t]
-              [record (ty size nflds rtd pad-ty* fld*) (revisit-record? x)]
+              [record (maybe-uid size nflds rtd pad-ty* fld*) (revisit-record? x)]
               [else #f])))
         (fasl-case x
           [entry (fasl)
             (fasl-case fasl
               [closure (offset c) x]
               [revisit (fasl) x]
-              [record (ty size nflds rtd pad-ty* fld*) (and (revisit-record? fasl) x)]
+              [record (maybe-uid size nflds rtd pad-ty* fld*) (and (revisit-record? fasl) x)]
               [group (vfasl)
                (let ([fasl* (filter revisit-stuff? (vector->list vfasl))])
                  (and (not (null? fasl*))
                       (fasl-entry
                         (if (null? (cdr fasl*))
                             (car fasl*)
-                            (fasl-vector (list->vector fasl*))))))]
+                            (fasl-vector (constant fasl-type-vector) (list->vector fasl*))))))]
               [else #f])]
           [header (version machine dependencies) x]
           [else (sorry! "expected entry or header, got ~s" x)])))
@@ -823,11 +835,13 @@
                                (if (not x)
                                    (hashtable-set! gensym-table uname1 uname2)
                                    (string=? x uname2))))]
-                       [vector (vfasl) (vandmap fasl=? vfasl1 vfasl2)]
-                       [fxvector (viptr) (vandmap = viptr1 viptr2)]
-                       [bytevector (bv) (bytevector=? bv1 bv2)]
-                       [record (ty size nflds rtd pad-ty* fld*)
-                        (and (eqv? ty1 ty2)
+                       [vector (ty vfasl) (and (eqv? ty1 ty2) (vandmap fasl=? vfasl1 vfasl2))]
+                       [fxvector (ty viptr) (and (eqv? ty1 ty2) (vandmap = viptr1 viptr2))]
+                       [bytevector (ty bv) (and (eqv? ty1 ty2) (bytevector=? bv1 bv2))]
+                       [record (maybe-uid size nflds rtd pad-ty* fld*)
+                        (and (if maybe-uid1
+                                 (and maybe-uid2 (fasl=? maybe-uid1 maybe-uid2))
+                                 (not maybe-uid2))
                              (eqv? size1 size2)
                              (eqv? nflds1 nflds2)
                              (fasl=? rtd1 rtd2)
@@ -838,9 +852,9 @@
                         (and (eqv? high1 high2)
                              (eqv? low1 low2))]
                        [large-integer (sign vuptr) (and (eqv? sign1 sign2) (vandmap = vuptr1 vuptr2))]
-                       [eq-hashtable (mutable? weak? minlen veclen vpfasl)
+                       [eq-hashtable (mutable? subtype minlen veclen vpfasl)
                         (and (eqv? mutable?1 mutable?2)
-                             (eqv? weak?1 weak?2)
+                             (eqv? subtype1 subtype2)
                              (eqv? minlen1 minlen2)
                              ; don't care if veclens differ
                              #;(eqv? veclen1 veclen2)
@@ -876,10 +890,11 @@
                                (vandmap (lambda (x y) (and (fasl=? (car x) (car y)) (fasl=? (cdr x) (cdr y))))
                                  (vector-sort keyval? vpfasl1)
                                  (vector-sort keyval? vpfasl2))))]
-                       [code (flags free name info pinfo* bytes m reloc)
+                       [code (flags free name arity-mask info pinfo* bytes m reloc)
                         (and (eqv? flags1 flags2)
                              (eqv? free1 free2)
                              (fasl=? name1 name2)
+                             (fasl=? arity-mask1 arity-mask2)
                              (fasl=? info1 info2)
                              (fasl=? pinfo*1 pinfo*2)
                              (bytevector=? bytes1 bytes2)

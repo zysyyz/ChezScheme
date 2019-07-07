@@ -1,5 +1,5 @@
 ;;; 5_3.ms
-;;; Copyright 1984-2016 Cisco Systems, Inc.
+;;; Copyright 1984-2017 Cisco Systems, Inc.
 ;;; 
 ;;; Licensed under the Apache License, Version 2.0 (the "License");
 ;;; you may not use this file except in compliance with the License.
@@ -1599,6 +1599,30 @@
     (error? (* 'a 3 4))
     (error? (* 3 5 'a 4))
     (eqv? (* 1 2) 2)
+    (eqv? (* 23170 23170) 536848900)
+    (eqv? (* 23170 -23170) -536848900)
+    (eqv? (* -23170 23170) -536848900)
+    (eqv? (* -23170 -23170) 536848900)
+    (eqv? (* 23171 23170) 536872070)
+    (eqv? (* 23171 -23170) -536872070)
+    (eqv? (* -23171 23170) -536872070)
+    (eqv? (* -23171 -23170) 536872070)
+    (eqv? (* 23171 23171) 536895241)
+    (eqv? (* 23171 -23171) -536895241)
+    (eqv? (* -23171 23171) -536895241)
+    (eqv? (* -23171 -23171) 536895241)
+    (eqv? (* #x3FFFFFFF #x3FFFFFFF) #xFFFFFFF80000001)
+    (eqv? (* #x3FFFFFFF #x-3FFFFFFF) #x-FFFFFFF80000001)
+    (eqv? (* #x-3FFFFFFF #x3FFFFFFF) #x-FFFFFFF80000001)
+    (eqv? (* #x-3FFFFFFF #x-3FFFFFFF) #xFFFFFFF80000001)
+    (eqv? (* #x40000000 #x3FFFFFFF) #xFFFFFFFC0000000)
+    (eqv? (* #x40000000 #x-3FFFFFFF) #x-FFFFFFFC0000000)
+    (eqv? (* #x-40000000 #x3FFFFFFF) #x-FFFFFFFC0000000)
+    (eqv? (* #x-40000000 #x-3FFFFFFF) #xFFFFFFFC0000000)
+    (eqv? (* #x40000000 #x40000000) #x1000000000000000)
+    (eqv? (* #x40000000 #x-40000000) #x-1000000000000000)
+    (eqv? (* #x-40000000 #x40000000) #x-1000000000000000)
+    (eqv? (* #x-40000000 #x-40000000) #x1000000000000000)
     (fl~= (* 1.0 2) 2.0)
     (fl~= (* 1 2.0) 2.0)
     (eqv? (* 3/5 2/5) 6/25)
@@ -1876,6 +1900,8 @@
     (error? (even? 3.2))
     (error? (even? 3.0+1.0i))
     (error? (even? 1+1i))
+    (error? (even? +inf.0))
+    (error? (even? +nan.0))
  )
 
 (mat odd?
@@ -1891,6 +1917,8 @@
     (error? (odd? 3.2))
     (error? (odd? 3.0+1.0i))
     (error? (odd? 3+1i))
+    (error? (odd? +inf.0))
+    (error? (odd? +nan.0))
  )
 
 (mat 1+
